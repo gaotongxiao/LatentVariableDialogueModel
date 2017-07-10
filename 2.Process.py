@@ -15,9 +15,13 @@ while True:
     break
   line = line.split('\t')
   questions.append(line[0])
-  answers.append(line[1])
+  answers.append(line[1].strip("\r\n"))
 f.close()
 vocabulary_size = 5000
+
+#get max length of one utterance to determine the max length of RNN
+rnn_length = len(max(questions + answers, key = len))
+print(rnn_length)
 
 def build_dataset(words, n_words):
   """Process raw inputs into a dataset."""
