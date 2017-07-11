@@ -124,7 +124,7 @@ with tf.device('/cpu:0'):
 
   # Construct the SGD optimizer using a learning rate of 1.0.
   optimizer= tf.train.GradientDescentOptimizer(1.0).minimize(loss)
-
+'''
 with tf.Session() as sess:
   sess.run(tf.global_variables_initializer())
   average_loss = 0
@@ -144,7 +144,7 @@ with tf.Session() as sess:
       # The average loss is an estimate of the loss over the last 2000 batches.
       print('Average loss at step ', step, ': ', average_loss)
       average_loss = 0
-
+'''
 #Now we get the word embedding vector, start building biRNN
 #First translate questions and answers to predefined integer
 questions_data = []
@@ -191,17 +191,27 @@ def generate_qa_batch(qa_batch_size):
   current_qa_index = target_qa_index
   return batch_q, batch_a, batch_q_len, batch_a_len, qa_batch_size
 
-# embed= tf.nn.embedding_lookup(embeddings, train_inputs)
 qa_batch_size = 128
 train_times = 10000
-q_placeholder = tf.placeholder(tf.float32, shape = (qa_batch_size, None, embedding_size))
+q_placeholder = tf.placeholder(tf.int32, shape = (qa_batch_size, None, embedding_size))
 q_sequence_length = tf.placeholder(tf.int32, shape = (qa_batch_size))
-a_placeholder = tf.placeholder(tf.float32, shape = (qa_batch_size, None, embedding_size))
+a_placeholder = tf.placeholder(tf.int32, shape = (qa_batch_size, None, embedding_size))
 a_sequence_length = tf.placeholder(tf.int32, shape = (qa_batch_size))
 q_fw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
 q_bw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
 a_fw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
 a_bw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
-hx, output_states = tf.nn.bidirectional_dynamic_rnn(q_fw_cell, q_bw_cell, q_placeholder, sequence_length=q_sequence_length, dtype=tf.float32)
-hy, output_states = tf.nn.bidirectional_dynamic_rnn(a_fw_cell, a_bw_cell, a_placeholder, sequence_length=a_sequence_length, dtype=tf.float32)
+q_embedded = tf.nn.embedding_lookup(embeddings, q_placeholder)
+a_embedded = tf.nn.embedding_lookup(embeddings, a_placeholder)
+hx, output_states = tf.nn.bidirectional_dynamic_rnn(q_fw_cell, q_bw_cell, q_embedded, sequence_length=q_sequence_length, dtype=tf.float32)
+hy, output_states = tf.nn.bidirectional_dynamic_rnn(a_fw_cell, a_bw_cell, a_embedded, sequence_length=a_sequence_length, dtype=tf.float32)
+del output_states
+hx = tf.reduce_sum(hx, reduction_indices=1)
+hx = hx / q_sequence_length
+hy = tf.reduce_sum(hy, reduction_indices=1)
+hy = hy / a_sequence_length
 
+with tf.Session() as sess:
+  sess.run(tf.global_variables_initializer())
+  batch_q, batch_a, batch_q_len, batch_a_len, real_qa_batch_size = generate_batch(qa_batch_size)
+  hx = sess.run([hx], feed_dict={q_placeholder:batch_q, a_placeholder:batch_a, q_sequence_length:batch_q_len, a_sequence_length:batch_a_len})
