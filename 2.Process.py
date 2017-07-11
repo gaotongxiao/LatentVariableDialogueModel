@@ -18,13 +18,10 @@ while True:
   if not line:
     break
   line = line.split('\t')
-  questions.append(line[0])
-  answers.append(line[1].strip("\r\n"))
+  questions.append(line[0].split())
+  answers.append(line[1].split())
 f.close()
 vocabulary_size = 5000
-
-#get max length of one utterance to determine the max length of RNN
-rnn_length = len(max(questions + answers, key = len))
 
 def build_dataset(words, n_words):
   """Process raw inputs into a dataset."""
@@ -48,8 +45,13 @@ def build_dataset(words, n_words):
 
 data, count, dictionary, reverse_dictionary = build_dataset(vocalbuary,
                                                             vocabulary_size)
+#reversed_dictionary: int -> word
+#dictionary: word -> int
+'''
 print('Most common words (+UNK)', count[:5])
 print('Sample data', data[:10], [reverse_dictionary[i] for i in data[:10]])
+'''
+del vocalbuary, count
 
 data_index = 0
 
@@ -142,3 +144,53 @@ with tf.Session() as sess:
       # The average loss is an estimate of the loss over the last 2000 batches.
       print('Average loss at step ', step, ': ', average_loss)
       average_loss = 0
+
+#Now we get the word embedding vector, start building biRNN
+#First translate questions and answers to predefined integer
+questions_data = []
+answers_data = []
+for question in questions:
+  words = []
+  for d in question:
+    try:
+      words.append(dictionary[d])
+    except:
+      words.append(dictionary['UNK'])
+  questions_data.append(words)
+for answer in answers:
+  words = []
+  try:
+    words.append(dictionary[d])
+  except:
+    words.append(dictionary['UNK'])
+  answers_data.append(words)
+
+#Now define a batch generation function
+#it will return batch_size of q&a batch, sequence_length
+#!!!!!!!Not throughtly tested yet, may produce bug
+current_qa_index = 0
+qa_pairs_count = len(questions)
+def generate_qa_batch(qa_batch_size):
+  global current_qa_index, questions_data, answers_data, embeddings 
+  if current_qa_index > qa_pairs_count - 1:
+    current_qa_index = 0
+  target_qa_index = current_qa_index + qa_batch_size
+  if target_qa_index > qa_pairs_count:
+    target_qa_index = qa_pairs_count
+  batch_q = questions_data[current_qa_index:target_qa_index]
+  batch_a = answers_data[current_qa_index:target_qa_index]
+  current_qa_index = target_qa_index
+  return batch_q, batch_a
+
+# embed= tf.nn.embedding_lookup(embeddings, train_inputs)
+qa_batch_size = 128
+q_placeholder = tf.placeholder(tf.float32, shape = (qa_batch_size, None, embedding_size))
+q_sequence_length = tf.placeholder(tf.int32, shape = (qa_batch_size))
+a_placeholder = tf.placeholder(tf.float32, shape = (qa_batch_size, None, embedding_size))
+a_sequence_length = tf.placeholder(tf.int32, shape = (qa_batch_size))
+q_fw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
+q_bw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
+a_fw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
+a_bw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
+q_bRNN = tf.nn.bidirectional_dynamic_rnn(q_fw_cell, q_bw_cell, q_placeholder, sequence_length = q_sequence_length)
+a_bRNN = tf.nn.bidirectional_dynamic_rnn(a_fw_cell, a_bw_cell, a_placeholder, sequence_length = a_sequence_length)
