@@ -149,6 +149,8 @@ with tf.Session() as sess:
 #First translate questions and answers to predefined integer
 questions_data = []
 answers_data = []
+questions_data_length = []
+answers_data_length = []
 for question in questions:
   words = []
   for d in question:
@@ -157,13 +159,17 @@ for question in questions:
     except:
       words.append(dictionary['UNK'])
   questions_data.append(words)
+  questions_data_length.append(len(words))
 for answer in answers:
   words = []
-  try:
-    words.append(dictionary[d])
-  except:
-    words.append(dictionary['UNK'])
+  for d in answer:
+    try:
+      words.append(dictionary[d])
+    except:
+      words.append(dictionary['UNK'])
   answers_data.append(words)
+  answers_data_length.append(len(words))
+print(answers_data[0], answers_data_length[0])
 
 #Now define a batch generation function
 #it will return batch_size of q&a batch, sequence_length
@@ -171,19 +177,23 @@ for answer in answers:
 current_qa_index = 0
 qa_pairs_count = len(questions)
 def generate_qa_batch(qa_batch_size):
-  global current_qa_index, questions_data, answers_data, embeddings 
+  global current_qa_index, questions_data, answers_data, questions_data_length, answers_data_length, embeddings 
   if current_qa_index > qa_pairs_count - 1:
     current_qa_index = 0
   target_qa_index = current_qa_index + qa_batch_size
   if target_qa_index > qa_pairs_count:
+    qa_batch_size = qa_pairs_count - current_qa_index
     target_qa_index = qa_pairs_count
   batch_q = questions_data[current_qa_index:target_qa_index]
   batch_a = answers_data[current_qa_index:target_qa_index]
+  batch_q_len = questions_data_length[current_qa_index:target_qa_index]
+  batch_a_len = answers_data_length[current_qa_index:target_qa_index]
   current_qa_index = target_qa_index
-  return batch_q, batch_a
+  return batch_q, batch_a, batch_q_len, batch_a_len, qa_batch_size
 
 # embed= tf.nn.embedding_lookup(embeddings, train_inputs)
 qa_batch_size = 128
+train_times = 10000
 q_placeholder = tf.placeholder(tf.float32, shape = (qa_batch_size, None, embedding_size))
 q_sequence_length = tf.placeholder(tf.int32, shape = (qa_batch_size))
 a_placeholder = tf.placeholder(tf.float32, shape = (qa_batch_size, None, embedding_size))
@@ -192,5 +202,6 @@ q_fw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
 q_bw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
 a_fw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
 a_bw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
-q_bRNN = tf.nn.bidirectional_dynamic_rnn(q_fw_cell, q_bw_cell, q_placeholder, sequence_length = q_sequence_length)
-a_bRNN = tf.nn.bidirectional_dynamic_rnn(a_fw_cell, a_bw_cell, a_placeholder, sequence_length = a_sequence_length)
+hx, output_states = tf.nn.bidirectional_dynamic_rnn(q_fw_cell, q_bw_cell, q_placeholder, sequence_length=q_sequence_length, dtype=tf.float32)
+hy, output_states = tf.nn.bidirectional_dynamic_rnn(a_fw_cell, a_bw_cell, a_placeholder, sequence_length=a_sequence_length, dtype=tf.float32)
+
