@@ -225,8 +225,20 @@ hx = tf.reduce_sum(hx, reduction_indices=1)
 hx = tf.div(hx, tf.cast(q_sequence_length, tf.float32))
 hy = tf.reduce_sum(hy, reduction_indices=1)
 hy = tf.div(hy, tf.cast(a_sequence_length, tf.float32))
+hxhy = tf.concat([hx, hy], 0)
 
-with tf.Session as sess:
+#Get mean and variance of latent variable z
+z_hidden_size = 64
+W_mean = tf.Variable(tf.random_uniform([embedding_size, z_hidden_size], -1, 1), name='W_mean')
+b_mean = tf.Variable(tf.random_uniform([1, z_hidden_size], -1, 1), name='b_mean')
+W_sigma = tf.Variable(tf.random_uniform([embedding_size, z_hidden_size], -1, 1), name='W_sigma')
+b_sigma = tf.Variable(tf.random_uniform([1, z_hidden_size], -1, 1), name='b_sigma')
+mean = tf.matmul(hxhy, W_mean) + b_mean
+sigma = tf.exp(tf.matmul(hxhy, W_sigma) + b_sigma)
+distribution = tf.contrib.distributions.MultivariateNormalDiag(loc=mean, scale_diag=sigma)
+z = distribution.sample()
+
+with tf.Session() as sess:
   sess.run(tf.global_variables_initializer())
   
   #Get Word Embedding Vector
@@ -252,5 +264,6 @@ with tf.Session as sess:
   for _ in range(1):
     batch_q, batch_a, batch_q_len, batch_a_len, real_qa_batch_size = generate_qa_batch(
         qa_batch_size)
-    hx = sess.run([hx], feed_dict={q_placeholder: batch_q, a_placeholder: batch_a,
+    z = sess.run([z], feed_dict={q_placeholder: batch_q, a_placeholder: batch_a,
                                   q_sequence_length: batch_q_len, a_sequence_length: batch_a_len})
+    print(z)
