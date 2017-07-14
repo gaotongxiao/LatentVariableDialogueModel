@@ -199,7 +199,9 @@ exit()
 '''
 
 qa_batch_size = 128
-train_times = 10000
+train_times = 1001
+current_step = tf.placeholder(tf.float32)
+
 q_placeholder = tf.placeholder(tf.int32, shape=(None, None), name="q_placeholder")
 q_sequence_length = tf.placeholder(tf.int32, shape=(None, 1), name="q_sequence_length")
 a_placeholder = tf.placeholder(tf.int32, shape=(None, None), name="a_placeholder")
@@ -236,8 +238,13 @@ sigma = tf.exp(tf.contrib.layers.fully_connected(hxhy, z_hidden_size));
 distribution = tf.contrib.distributions.MultivariateNormalDiag(loc=mean, scale_diag=sigma)
 z = distribution.sample()
 
+
+def weight_cal_false():
+  return tf.cond(tf.less(current_step, train_times * 0.9), lambda: (1 / (0.8 * train_times) * (current_step - 0.1 * train_times)), lambda: tf.cast(1, tf.float32))
+
 #provide esstential information for training decoder
 hxz = tf.concat([hx, z], 1)
+hxz = tf.nn.dropout(hxz, 0.5)
 with tf.variable_scope("decoderRNNCell"):
   decoder_cell = tf.nn.rnn_cell.GRUCell(embedding_size + z_hidden_size)
 with tf.variable_scope("decoderRNN"):
@@ -246,14 +253,20 @@ with tf.variable_scope("decoderRNN"):
 result = tf.contrib.layers.fully_connected(result, vocabulary_size)
 square_sigma = tf.square(sigma)
 square_mean = tf.square(mean)
-a_target = tf.pad(a_placeholder[:][1:], [[0, 0], [0, 1]])
+a_target = tf.pad(a_placeholder[:, 1:], [[0, 0], [0, 1]])
 loss = 0.5 * tf.reduce_sum(1 + tf.log(square_sigma) - square_mean - square_sigma) / tf.cast(real_batch_size_placeholder, tf.float32)
+kl_annealing_weight = tf.cond(tf.less(current_step, train_times / 10), lambda: tf.cast(0, tf.float32), weight_cal_false);
+loss *= (1 / train_times * current_step)
 loss += tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=result, labels=tf.one_hot(a_target, vocabulary_size, dtype=tf.float32)))
 train = tf.train.AdamOptimizer().minimize(loss)
 
+saver = tf.train.Saver()
+
+#now let's predict
 
 with tf.Session() as sess:
   sess.run(tf.global_variables_initializer())
+  saver.restore(sess, "model")
   #Get Word Embedding Vector
   '''
   average_loss = 0
@@ -276,9 +289,11 @@ with tf.Session() as sess:
   '''
   
   #get bRNN
-  for _ in range(1):
+  for step in range(train_times):
     batch_q, batch_a, batch_q_len, batch_a_len, real_qa_batch_size = generate_qa_batch(
         qa_batch_size)
-    loss = sess.run([loss], feed_dict={q_placeholder: batch_q, a_placeholder: batch_a,
-                                  q_sequence_length: batch_q_len, a_sequence_length: batch_a_len, real_batch_size_placeholder:real_qa_batch_size})
-    print(loss)
+    l, _ = sess.run([loss, train], feed_dict={q_placeholder: batch_q, a_placeholder: batch_a,
+                                  q_sequence_length: batch_q_len, a_sequence_length: batch_a_len, real_batch_size_placeholder:real_qa_batch_size, current_step:step})
+    if step % 100 == 0:
+      print(str(step) + ':' + str(l))
+      saver.save(sess, "model")
