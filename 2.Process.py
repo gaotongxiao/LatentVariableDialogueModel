@@ -18,11 +18,12 @@ while True:
   if not line:
     break
   line = line.split('\t')
-  questions.append(line[0].split())
-  answers.append(line[1].split())
+  questions.append(["<GO>"] + line[0].split() + ["<EOS>"])
+  answers.append(["<GO>"] + line[1].split() + ["<EOS>"])
 f.close()
-vocabulary_size = 5000
 
+vocabulary_size = 5000
+vocabulary_size += 2 #for <GO> and <EOS> 
 
 def build_dataset(words, n_words):
   """Process raw inputs into a dataset."""
@@ -59,7 +60,7 @@ data_index = 0
 
 # Step 3: Function to generate a training batch for the skip-gram model.
 
-
+'''
 def generate_batch(batch_size, num_skips, skip_window):
   global data_index
   assert batch_size % num_skips == 0
@@ -85,7 +86,7 @@ def generate_batch(batch_size, num_skips, skip_window):
   # Backtrack a little bit to avoid skipping words in the end of a batch
   data_index = (data_index + len(data) - span) % len(data)
   return batch, labels
-
+'''
 
 '''
 batch, labels = generate_batch(batch_size=8, num_skips=2, skip_window=1)
@@ -108,6 +109,7 @@ with tf.device('/cpu:0'):
   # Look up embeddings for inputs.
   embeddings = tf.Variable(
       tf.random_uniform([vocabulary_size, embedding_size], -1.0, 1.0))
+  '''
   embed = tf.nn.embedding_lookup(embeddings, train_inputs)
 
   # Construct the variables for the NCE loss
@@ -129,6 +131,7 @@ with tf.device('/cpu:0'):
 
   # Construct the SGD optimizer using a learning rate of 1.0.
   optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(loss)
+'''
 
 #Now we get the word embedding vector, start building biRNN
 #First translate questions and answers to predefined integer
@@ -161,7 +164,6 @@ for answer in answers:
 current_qa_index = 0
 qa_pairs_count = len(questions)
 
-
 def generate_qa_batch(qa_batch_size):
   global current_qa_index, questions_data, answers_data, questions_data_length, answers_data_length
   if current_qa_index > qa_pairs_count - 1:
@@ -190,7 +192,7 @@ def generate_qa_batch(qa_batch_size):
   current_qa_index = target_qa_index
   return batch_q, batch_a, batch_q_len, batch_a_len, qa_batch_size
 '''
-for test only
+#for test only
 a, b, c, d, e = generate_qa_batch(2)
 print(a, b, c, d, e)
 exit()
@@ -202,6 +204,7 @@ q_placeholder = tf.placeholder(tf.int32, shape=(None, None), name="q_placeholder
 q_sequence_length = tf.placeholder(tf.int32, shape=(None, 1), name="q_sequence_length")
 a_placeholder = tf.placeholder(tf.int32, shape=(None, None), name="a_placeholder")
 a_sequence_length = tf.placeholder(tf.int32, shape=(None, 1), name="a_sequence_length")
+real_batch_size_placeholder = tf.placeholder(tf.int32, name="real_batch_size_placeholder")
 with tf.variable_scope("qRNNfw"):
   q_fw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
 with tf.variable_scope("qRNNbw"):
@@ -216,32 +219,43 @@ with tf.variable_scope("qRNN"):
   hx, output_states = tf.nn.bidirectional_dynamic_rnn(
       q_fw_cell, q_bw_cell, q_embedded, sequence_length=tf.squeeze(q_sequence_length, 1), dtype=tf.float32)
 with tf.variable_scope("aRNN"):
-  hy, output_states = tf.nn.bidirectional_dynamic_rnn(
+  hy, _ = tf.nn.bidirectional_dynamic_rnn(
       a_fw_cell, a_bw_cell, a_embedded, sequence_length=tf.squeeze(a_sequence_length, 1), dtype=tf.float32)
-del output_states
 hx = (hx[0] + hx[1]) / 2
 hy = (hy[0] + hy[1]) / 2
 hx = tf.reduce_sum(hx, reduction_indices=1)
 hx = tf.div(hx, tf.cast(q_sequence_length, tf.float32))
 hy = tf.reduce_sum(hy, reduction_indices=1)
 hy = tf.div(hy, tf.cast(a_sequence_length, tf.float32))
-hxhy = tf.concat([hx, hy], 0)
+hxhy = tf.concat([hx, hy], 1)
 
 #Get mean and variance of latent variable z
 z_hidden_size = 64
-W_mean = tf.Variable(tf.random_uniform([embedding_size, z_hidden_size], -1, 1), name='W_mean')
-b_mean = tf.Variable(tf.random_uniform([1, z_hidden_size], -1, 1), name='b_mean')
-W_sigma = tf.Variable(tf.random_uniform([embedding_size, z_hidden_size], -1, 1), name='W_sigma')
-b_sigma = tf.Variable(tf.random_uniform([1, z_hidden_size], -1, 1), name='b_sigma')
-mean = tf.matmul(hxhy, W_mean) + b_mean
-sigma = tf.exp(tf.matmul(hxhy, W_sigma) + b_sigma)
+mean = tf.contrib.layers.fully_connected(hxhy, z_hidden_size);
+sigma = tf.exp(tf.contrib.layers.fully_connected(hxhy, z_hidden_size));
 distribution = tf.contrib.distributions.MultivariateNormalDiag(loc=mean, scale_diag=sigma)
 z = distribution.sample()
 
+#provide esstential information for training decoder
+hxz = tf.concat([hx, z], 1)
+with tf.variable_scope("decoderRNNCell"):
+  decoder_cell = tf.nn.rnn_cell.GRUCell(embedding_size + z_hidden_size)
+with tf.variable_scope("decoderRNN"):
+  result, _ = tf.nn.dynamic_rnn(
+      decoder_cell, a_embedded, sequence_length=tf.squeeze(a_sequence_length, 1), initial_state=hxz)
+result = tf.contrib.layers.fully_connected(result, vocabulary_size)
+square_sigma = tf.square(sigma)
+square_mean = tf.square(mean)
+a_target = tf.pad(a_placeholder[:][1:], [[0, 0], [0, 1]])
+loss = 0.5 * tf.reduce_sum(1 + tf.log(square_sigma) - square_mean - square_sigma) / tf.cast(real_batch_size_placeholder, tf.float32)
+loss += tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=result, labels=tf.one_hot(a_target, vocabulary_size, dtype=tf.float32)))
+train = tf.train.AdamOptimizer().minimize(loss)
+
+
 with tf.Session() as sess:
   sess.run(tf.global_variables_initializer())
-  
   #Get Word Embedding Vector
+  '''
   average_loss = 0
   for step in xrange(10001):
     batch_inputs, batch_labels = generate_batch(
@@ -259,11 +273,12 @@ with tf.Session() as sess:
       # The average loss is an estimate of the loss over the last 2000 batches.
       print('Average loss at step ', step, ': ', average_loss)
       average_loss = 0
+  '''
   
   #get bRNN
   for _ in range(1):
     batch_q, batch_a, batch_q_len, batch_a_len, real_qa_batch_size = generate_qa_batch(
         qa_batch_size)
-    z = sess.run([z], feed_dict={q_placeholder: batch_q, a_placeholder: batch_a,
-                                  q_sequence_length: batch_q_len, a_sequence_length: batch_a_len})
-    print(z)
+    loss = sess.run([loss], feed_dict={q_placeholder: batch_q, a_placeholder: batch_a,
+                                  q_sequence_length: batch_q_len, a_sequence_length: batch_a_len, real_batch_size_placeholder:real_qa_batch_size})
+    print(loss)
