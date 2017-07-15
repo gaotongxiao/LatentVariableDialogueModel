@@ -9,8 +9,10 @@ import math
 Get word embedding vector
 '''
 f = open("data/segTrain.txt", "r")
-vocalbuary = f.read().split()
+'''
+vocabulary = f.read().split()
 f.seek(0)
+'''
 questions = []
 answers = []
 while True:
@@ -21,9 +23,13 @@ while True:
   questions.append(["<GO>"] + line[0].split() + ["<EOS>"])
   answers.append(["<GO>"] + line[1].split() + ["<EOS>"])
 f.close()
+vocabulary = []
+for q in questions+answers:
+  vocabulary += q
 
 vocabulary_size = 5000
-vocabulary_size += 2 #for <GO> and <EOS> 
+vocabulary_size += 2  # for <GO> and <EOS>
+
 
 def build_dataset(words, n_words):
   """Process raw inputs into a dataset."""
@@ -32,6 +38,10 @@ def build_dataset(words, n_words):
   dictionary = dict()
   for word, _ in count:
     dictionary[word] = len(dictionary)
+    '''
+  dictionary["<GO>"] = len(dictionary)
+  dictionary["<EOS>"] = len(dictionary)
+  '''
   data = list()
   unk_count = 0
   for word in words:
@@ -46,7 +56,7 @@ def build_dataset(words, n_words):
   return data, count, dictionary, reversed_dictionary
 
 
-data, count, dictionary, reverse_dictionary = build_dataset(vocalbuary,
+data, count, dictionary, reverse_dictionary = build_dataset(vocabulary,
                                                             vocabulary_size)
 #reversed_dictionary: int -> word
 #dictionary: word -> int
@@ -54,7 +64,7 @@ data, count, dictionary, reverse_dictionary = build_dataset(vocalbuary,
 print('Most common words (+UNK)', count[:5])
 print('Sample data', data[:10], [reverse_dictionary[i] for i in data[:10]])
 '''
-del vocalbuary, count
+del vocabulary, count
 
 data_index = 0
 
@@ -164,6 +174,7 @@ for answer in answers:
 current_qa_index = 0
 qa_pairs_count = len(questions)
 
+
 def generate_qa_batch(qa_batch_size):
   global current_qa_index, questions_data, answers_data, questions_data_length, answers_data_length
   if current_qa_index > qa_pairs_count - 1:
@@ -177,20 +188,22 @@ def generate_qa_batch(qa_batch_size):
   batch_q_len = questions_data_length[current_qa_index:target_qa_index]
   batch_a_len = answers_data_length[current_qa_index:target_qa_index]
   #pad short sequences
-  max_q_len = max(batch_q_len, key=lambda x:x[0])[0]
-  max_a_len = max(batch_a_len, key=lambda x:x[0])[0]
+  max_q_len = max(batch_q_len, key=lambda x: x[0])[0]
+  max_a_len = max(batch_a_len, key=lambda x: x[0])[0]
   for i in range(len(batch_q)):
     currentLen = len(batch_q[i])
     if currentLen < max_q_len:
       for _ in range(max_q_len - currentLen):
-        batch_q[i].append(0) 
+        batch_q[i].append(0)
   for i in range(len(batch_a)):
     currentLen = len(batch_a[i])
     if currentLen < max_a_len:
       for _ in range(max_a_len - currentLen):
-        batch_a[i].append(0) 
+        batch_a[i].append(0)
   current_qa_index = target_qa_index
   return batch_q, batch_a, batch_q_len, batch_a_len, qa_batch_size
+
+
 '''
 #for test only
 a, b, c, d, e = generate_qa_batch(2)
@@ -199,14 +212,19 @@ exit()
 '''
 
 qa_batch_size = 128
-train_times = 1001
+train_times = 10001
 current_step = tf.placeholder(tf.float32)
 
-q_placeholder = tf.placeholder(tf.int32, shape=(None, None), name="q_placeholder")
-q_sequence_length = tf.placeholder(tf.int32, shape=(None, 1), name="q_sequence_length")
-a_placeholder = tf.placeholder(tf.int32, shape=(None, None), name="a_placeholder")
-a_sequence_length = tf.placeholder(tf.int32, shape=(None, 1), name="a_sequence_length")
-real_batch_size_placeholder = tf.placeholder(tf.int32, name="real_batch_size_placeholder")
+q_placeholder = tf.placeholder(
+    tf.int32, shape=(None, None), name="q_placeholder")
+q_sequence_length = tf.placeholder(
+    tf.int32, shape=(None, 1), name="q_sequence_length")
+a_placeholder = tf.placeholder(
+    tf.int32, shape=(None, None), name="a_placeholder")
+a_sequence_length = tf.placeholder(
+    tf.int32, shape=(None, 1), name="a_sequence_length")
+real_batch_size_placeholder = tf.placeholder(
+    tf.int32, name="real_batch_size_placeholder")
 with tf.variable_scope("qRNNfw"):
   q_fw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
 with tf.variable_scope("qRNNbw"):
@@ -233,14 +251,16 @@ hxhy = tf.concat([hx, hy], 1)
 
 #Get mean and variance of latent variable z
 z_hidden_size = 64
-mean = tf.contrib.layers.fully_connected(hxhy, z_hidden_size);
-sigma = tf.exp(tf.contrib.layers.fully_connected(hxhy, z_hidden_size));
-distribution = tf.contrib.distributions.MultivariateNormalDiag(loc=mean, scale_diag=sigma)
-z = distribution.sample()
+mean = tf.contrib.layers.fully_connected(hxhy, z_hidden_size)
+sigma = tf.exp(tf.contrib.layers.fully_connected(hxhy, z_hidden_size))
+distribution = tf.contrib.distributions.MultivariateNormalDiag(
+    loc=tf.zeros(shape=(z_hidden_size)), scale_diag=tf.ones(shape=(z_hidden_size)))
+z = distribution.sample() * sigma + mean  # dot multiply
 
 
 def weight_cal_false():
   return tf.cond(tf.less(current_step, train_times * 0.9), lambda: (1 / (0.8 * train_times) * (current_step - 0.1 * train_times)), lambda: tf.cast(1, tf.float32))
+
 
 #provide esstential information for training decoder
 hxz = tf.concat([hx, z], 1)
@@ -250,19 +270,58 @@ with tf.variable_scope("decoderRNNCell"):
 with tf.variable_scope("decoderRNN"):
   result, _ = tf.nn.dynamic_rnn(
       decoder_cell, a_embedded, sequence_length=tf.squeeze(a_sequence_length, 1), initial_state=hxz)
-result = tf.contrib.layers.fully_connected(result, vocabulary_size)
+result = tf.contrib.layers.fully_connected(result, vocabulary_size, scope="resEmbedding", reuse=None)
 square_sigma = tf.square(sigma)
 square_mean = tf.square(mean)
 a_target = tf.pad(a_placeholder[:, 1:], [[0, 0], [0, 1]])
-loss = 0.5 * tf.reduce_sum(1 + tf.log(square_sigma) - square_mean - square_sigma) / tf.cast(real_batch_size_placeholder, tf.float32)
-kl_annealing_weight = tf.cond(tf.less(current_step, train_times / 10), lambda: tf.cast(0, tf.float32), weight_cal_false);
-loss *= (1 / train_times * current_step)
-loss += tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=result, labels=tf.one_hot(a_target, vocabulary_size, dtype=tf.float32)))
+a_target = tf.Print(a_target, [a_target[0]])
+loss = 0.5 * tf.reduce_sum(1 + tf.log(square_sigma) - square_mean -
+                           square_sigma) / tf.cast(real_batch_size_placeholder, tf.float32)
+kl_annealing_weight = tf.cond(tf.less(
+    current_step, train_times / 10), lambda: tf.cast(0, tf.float32), weight_cal_false);
+loss *= kl_annealing_weight
+loss += tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=result,
+                                                               labels=tf.one_hot(a_target, vocabulary_size, dtype=tf.float32)))
 train = tf.train.AdamOptimizer().minimize(loss)
 
 saver = tf.train.Saver()
 
 #now let's predict
+def predict_loop_body(last_output, last_state, output, i):
+  global decoder_cell, embedding_size, z_hidden_size, vocabulary_size, embeddings
+  last_output = tf.nn.embedding_lookup(embeddings, last_output)
+  last_output = tf.convert_to_tensor(last_output)
+  last_state = tf.convert_to_tensor(last_state)
+  res = decoder_cell.call(last_output, last_state)
+  ret = tf.contrib.layers.fully_connected(res[0], vocabulary_size, scope="resEmbedding", reuse=True)
+  ret = tf.convert_to_tensor([tf.argmax(ret, axis=1)[0]])
+  output = tf.concat([output, [tf.cast(ret, tf.int32)]], 1)
+  i += 1
+  return ret, res[1], output, i
+
+def predict_loop_cond(last_output, last_state, output, i):
+  if last_output == [dictionary["<EOS>"]]:
+    return tf.False
+  return tf.less(i, 20)
+
+predict_q = q_placeholder[0:1, :]
+predict_q_embedded = tf.nn.embedding_lookup(embeddings, predict_q)
+print(predict_q_embedded.get_shape())
+predict_q_sequence_length = q_sequence_length[0:1, :]
+'''
+with tf.variable_scope("qRNN"):
+  predict_hx, output_states = tf.nn.bidirectional_dynamic_rnn(
+      q_fw_cell, q_bw_cell, predict_q_embedded, sequence_length=tf.squeeze(predict_q_sequence_length, 1), dtype=tf.float32, reuse=True)
+predict_hx = (predict_hx[0] + predict_hx[1]) / 2
+predict_hx = tf.reduce_sum(predict_hx, reduction_indices=1)
+predict_hx = tf.div(predict_hx, tf.cast(predict_q_sequence_length, tf.float32))
+'''
+predict_hx = hx[0:1, :]
+predict_z = [distribution.sample()]
+predict_z = tf.tile(predict_z, [1, tf.shape(predict_hx)[1]])
+predict_hxz = tf.concat([predict_hx, predict_z], 1)
+_, _, predict_output, _ = tf.while_loop(predict_loop_cond, predict_loop_body, [tf.convert_to_tensor([dictionary["<GO>"]], dtype=tf.int64), tf.convert_to_tensor([tf.zeros(embedding_size + z_hidden_size, dtype=tf.float32)]), tf.convert_to_tensor([[dictionary["<GO>"]]]), tf.constant(0)], shape_invariants=[tf.TensorShape([1]), tf.TensorShape([1, embedding_size + z_hidden_size]), tf.TensorShape([1, None]), tf.TensorShape([])])
+
 
 with tf.Session() as sess:
   sess.run(tf.global_variables_initializer())
@@ -287,13 +346,17 @@ with tf.Session() as sess:
       print('Average loss at step ', step, ': ', average_loss)
       average_loss = 0
   '''
-  
+
   #get bRNN
+  batch_q, batch_a, batch_q_len, batch_a_len, real_qa_batch_size = generate_qa_batch(
+      qa_batch_size)
   for step in range(train_times):
-    batch_q, batch_a, batch_q_len, batch_a_len, real_qa_batch_size = generate_qa_batch(
-        qa_batch_size)
-    l, _ = sess.run([loss, train], feed_dict={q_placeholder: batch_q, a_placeholder: batch_a,
-                                  q_sequence_length: batch_q_len, a_sequence_length: batch_a_len, real_batch_size_placeholder:real_qa_batch_size, current_step:step})
-    if step % 100 == 0:
+    feed_dict = {q_placeholder: batch_q, a_placeholder: batch_a,
+                                              q_sequence_length: batch_q_len, a_sequence_length: batch_a_len, real_batch_size_placeholder: real_qa_batch_size, current_step: step}
+    l, _ = sess.run([loss, train], feed_dict=feed_dict)
+    print(at)
+    if step % 100 == 0 and step:
       print(str(step) + ':' + str(l))
-      saver.save(sess, "model")
+      # saver.save(sess, "model")
+      o = sess.run([predict_output], feed_dict=feed_dict)
+      print([reverse_dictionary[int(e)] for e in o[0][0]])
