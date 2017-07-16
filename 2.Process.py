@@ -114,12 +114,13 @@ num_sampled = 64    # Number of negative examples to sample.
 train_inputs = tf.placeholder(tf.int32, shape=[batch_size])
 train_labels = tf.placeholder(tf.int32, shape=[batch_size, 1])
 
+embeddings = tf.Variable(
+    tf.random_uniform([vocabulary_size, embedding_size], -1.0, 1.0))
+
 # Ops and variables pinned to the CPU because of missing GPU implementation
+'''
 with tf.device('/cpu:0'):
   # Look up embeddings for inputs.
-  embeddings = tf.Variable(
-      tf.random_uniform([vocabulary_size, embedding_size], -1.0, 1.0))
-  '''
   embed = tf.nn.embedding_lookup(embeddings, train_inputs)
 
   # Construct the variables for the NCE loss
@@ -170,10 +171,8 @@ for answer in answers:
 
 #Now define a batch generation function
 #it will return batch_size of q&a batch, sequence_length
-#!!!!!!!Not throughtly tested yet, may produce bug
 current_qa_index = 0
 qa_pairs_count = len(questions)
-
 
 def generate_qa_batch(qa_batch_size):
   global current_qa_index, questions_data, answers_data, questions_data_length, answers_data_length
@@ -205,14 +204,14 @@ def generate_qa_batch(qa_batch_size):
 
 
 '''
-#for test only
+#for testing only
 a, b, c, d, e = generate_qa_batch(2)
 print(a, b, c, d, e)
 exit()
 '''
 
 qa_batch_size = 128
-train_times = 10001
+train_times = 1001
 current_step = tf.placeholder(tf.float32)
 
 q_placeholder = tf.placeholder(
@@ -236,31 +235,31 @@ with tf.variable_scope("aRNNbw"):
 q_embedded = tf.nn.embedding_lookup(embeddings, q_placeholder)
 a_embedded = tf.nn.embedding_lookup(embeddings, a_placeholder)
 with tf.variable_scope("qRNN"):
-  hx, output_states = tf.nn.bidirectional_dynamic_rnn(
+  _, hx = tf.nn.bidirectional_dynamic_rnn(
       q_fw_cell, q_bw_cell, q_embedded, sequence_length=tf.squeeze(q_sequence_length, 1), dtype=tf.float32)
 with tf.variable_scope("aRNN"):
-  hy, _ = tf.nn.bidirectional_dynamic_rnn(
+  _, hy = tf.nn.bidirectional_dynamic_rnn(
       a_fw_cell, a_bw_cell, a_embedded, sequence_length=tf.squeeze(a_sequence_length, 1), dtype=tf.float32)
 hx = (hx[0] + hx[1]) / 2
 hy = (hy[0] + hy[1]) / 2
+'''
 hx = tf.reduce_sum(hx, reduction_indices=1)
 hx = tf.div(hx, tf.cast(q_sequence_length, tf.float32))
 hy = tf.reduce_sum(hy, reduction_indices=1)
 hy = tf.div(hy, tf.cast(a_sequence_length, tf.float32))
+'''
 hxhy = tf.concat([hx, hy], 1)
 
 #Get mean and variance of latent variable z
 z_hidden_size = 64
-mean = tf.contrib.layers.fully_connected(hxhy, z_hidden_size)
-sigma = tf.exp(tf.contrib.layers.fully_connected(hxhy, z_hidden_size))
+mean = tf.contrib.layers.fully_connected(hxhy, z_hidden_size, activation_fn=None)
+sigma = tf.exp(tf.contrib.layers.fully_connected(hxhy, z_hidden_size, activation_fn=None))
 distribution = tf.contrib.distributions.MultivariateNormalDiag(
     loc=tf.zeros(shape=(z_hidden_size)), scale_diag=tf.ones(shape=(z_hidden_size)))
 z = distribution.sample() * sigma + mean  # dot multiply
 
-
 def weight_cal_false():
   return tf.cond(tf.less(current_step, train_times * 0.9), lambda: (1 / (0.8 * train_times) * (current_step - 0.1 * train_times)), lambda: tf.cast(1, tf.float32))
-
 
 #provide esstential information for training decoder
 hxz = tf.concat([hx, z], 1)
@@ -270,11 +269,12 @@ with tf.variable_scope("decoderRNNCell"):
 with tf.variable_scope("decoderRNN"):
   result, _ = tf.nn.dynamic_rnn(
       decoder_cell, a_embedded, sequence_length=tf.squeeze(a_sequence_length, 1), initial_state=hxz)
-result = tf.contrib.layers.fully_connected(result, vocabulary_size, scope="resEmbedding", reuse=None)
+result = tf.contrib.layers.fully_connected(result, vocabulary_size, scope="resEmbedding", reuse=None, activation_fn=None)
+
+#calculate loss function
 square_sigma = tf.square(sigma)
 square_mean = tf.square(mean)
 a_target = tf.pad(a_placeholder[:, 1:], [[0, 0], [0, 1]])
-a_target = tf.Print(a_target, [a_target[0]])
 loss = 0.5 * tf.reduce_sum(1 + tf.log(square_sigma) - square_mean -
                            square_sigma) / tf.cast(real_batch_size_placeholder, tf.float32)
 kl_annealing_weight = tf.cond(tf.less(
@@ -293,20 +293,19 @@ def predict_loop_body(last_output, last_state, output, i):
   last_output = tf.convert_to_tensor(last_output)
   last_state = tf.convert_to_tensor(last_state)
   res = decoder_cell.call(last_output, last_state)
-  ret = tf.contrib.layers.fully_connected(res[0], vocabulary_size, scope="resEmbedding", reuse=True)
+  ret = tf.contrib.layers.fully_connected(res[0], vocabulary_size, scope="resEmbedding", reuse=True, activation_fn=None)
   ret = tf.convert_to_tensor([tf.argmax(ret, axis=1)[0]])
   output = tf.concat([output, [tf.cast(ret, tf.int32)]], 1)
   i += 1
   return ret, res[1], output, i
 
 def predict_loop_cond(last_output, last_state, output, i):
-  if last_output == [dictionary["<EOS>"]]:
+  if last_output[0] == dictionary["<EOS>"]:
     return tf.False
   return tf.less(i, 20)
 
 predict_q = q_placeholder[0:1, :]
 predict_q_embedded = tf.nn.embedding_lookup(embeddings, predict_q)
-print(predict_q_embedded.get_shape())
 predict_q_sequence_length = q_sequence_length[0:1, :]
 '''
 with tf.variable_scope("qRNN"):
@@ -318,14 +317,32 @@ predict_hx = tf.div(predict_hx, tf.cast(predict_q_sequence_length, tf.float32))
 '''
 predict_hx = hx[0:1, :]
 predict_z = [distribution.sample()]
-predict_z = tf.tile(predict_z, [1, tf.shape(predict_hx)[1]])
+predict_z = tf.tile(predict_z, [tf.shape(predict_hx)[0], 1])
 predict_hxz = tf.concat([predict_hx, predict_z], 1)
-_, _, predict_output, _ = tf.while_loop(predict_loop_cond, predict_loop_body, [tf.convert_to_tensor([dictionary["<GO>"]], dtype=tf.int64), tf.convert_to_tensor([tf.zeros(embedding_size + z_hidden_size, dtype=tf.float32)]), tf.convert_to_tensor([[dictionary["<GO>"]]]), tf.constant(0)], shape_invariants=[tf.TensorShape([1]), tf.TensorShape([1, embedding_size + z_hidden_size]), tf.TensorShape([1, None]), tf.TensorShape([])])
+predict_output, _, _ = tf.nn.raw_rnn(decoder_cell, loop_fn)
+# _, _, predict_output, _ = tf.while_loop(predict_loop_cond, predict_loop_body, [tf.convert_to_tensor([dictionary["<GO>"]], dtype=tf.int64), predict_hxz, tf.convert_to_tensor([[dictionary["<GO>"]]]), tf.constant(0)], shape_invariants=[tf.TensorShape([1]), tf.TensorShape([None, embedding_size + z_hidden_size]), tf.TensorShape([1, None]), tf.TensorShape([])])
 
+def loop_fn(time, previous_output, previous_state, previous_loop_state):
+  if previous_state is None:
+    assert previous_output is None and previous_state is None
+        return loop_fn_initial()
+    else:
+        return loop_fn_transition(time, previous_output, previous_state, previous_loop_state)
+
+def loop_fn_initial():
+
+
+def loop_fn_transition(time, previous_output, previous_state, previous_loop_state):
+  global max_reponse_length
+  def get_next_input():
+    return 0
+  finished = tf.convert_to_tensor(time >= max_response_length, dtype=tf.bool)
+  next_input = tf.cond(finished, lambda: tf.nn.embedding_lookup(embeddings, dictionary["<EOS>"], get_next_input))
+  return (finished, next_input, previous_state, previous_output, None)
 
 with tf.Session() as sess:
   sess.run(tf.global_variables_initializer())
-  saver.restore(sess, "model")
+  # saver.restore(sess, "model")
   #Get Word Embedding Vector
   '''
   average_loss = 0
@@ -354,7 +371,6 @@ with tf.Session() as sess:
     feed_dict = {q_placeholder: batch_q, a_placeholder: batch_a,
                                               q_sequence_length: batch_q_len, a_sequence_length: batch_a_len, real_batch_size_placeholder: real_qa_batch_size, current_step: step}
     l, _ = sess.run([loss, train], feed_dict=feed_dict)
-    print(at)
     if step % 100 == 0 and step:
       print(str(step) + ':' + str(l))
       # saver.save(sess, "model")
