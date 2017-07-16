@@ -331,13 +331,15 @@ def loop_fn(time, previous_output, previous_state, previous_loop_state):
 
 def loop_fn_initial():
 
-
 def loop_fn_transition(time, previous_output, previous_state, previous_loop_state):
   global max_reponse_length
   def get_next_input():
-    return 0
-  finished = tf.convert_to_tensor(time >= max_response_length, dtype=tf.bool)
-  next_input = tf.cond(finished, lambda: tf.nn.embedding_lookup(embeddings, dictionary["<EOS>"], get_next_input))
+    output_logits = tf.contrib.layers.fully_connected(previous_output, vocabulary_size, scope="resEmbedding", reuse=True, activation_fn=None)
+    predict = tf.argmax(output_logits, axis=1)
+    return tf.nn
+  element_finished = (time >= max_reponse_length)
+  finished = tf.reduce_all(element_finished)
+  next_input = tf.cond(finished, lambda: tf.nn.embedding_lookup(embeddings, dictionary["<EOS>"]), get_next_input)
   return (finished, next_input, previous_state, previous_output, None)
 
 with tf.Session() as sess:
