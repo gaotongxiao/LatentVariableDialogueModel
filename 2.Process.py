@@ -211,7 +211,7 @@ exit()
 '''
 
 qa_batch_size = 128
-train_times = 1001
+train_times = 2001
 current_step = tf.placeholder(tf.float32)
 
 q_placeholder = tf.placeholder(
@@ -240,8 +240,11 @@ with tf.variable_scope("qRNN"):
 with tf.variable_scope("aRNN"):
   _, hy = tf.nn.bidirectional_dynamic_rnn(
       a_fw_cell, a_bw_cell, a_embedded, sequence_length=tf.squeeze(a_sequence_length, 1), dtype=tf.float32)
-hx = (hx[0] + hx[1]) / 2
-hy = (hy[0] + hy[1]) / 2
+hx = tf.concat([hx[0], hx[1]], 1)
+hx = tf.contrib.layers.fully_connected(hx, embedding_size, activation_fn=tf.tanh)
+hy = tf.concat([hy[0], hy[1]], 1)
+hy = tf.contrib.layers.fully_connected(hy, embedding_size, activation_fn=tf.tanh)
+# mean = tf.contrib.layers.fully_connected(tf.concat(hx, z_hidden_size, activation_fn=None)
 '''
 hx = tf.reduce_sum(hx, reduction_indices=1)
 hx = tf.div(hx, tf.cast(q_sequence_length, tf.float32))
@@ -249,17 +252,16 @@ hy = tf.reduce_sum(hy, reduction_indices=1)
 hy = tf.div(hy, tf.cast(a_sequence_length, tf.float32))
 '''
 hxhy = tf.concat([hx, hy], 1)
-
 #Get mean and variance of latent variable z
 z_hidden_size = 64
 mean = tf.contrib.layers.fully_connected(hxhy, z_hidden_size, activation_fn=None)
-sigma = tf.exp(tf.contrib.layers.fully_connected(hxhy, z_hidden_size, activation_fn=None))
+sigma = tf.exp(tf.contrib.layers.fully_connected(hxhy, z_hidden_size, activation_fn=None) / 2.0) #div 2 -> sqrt
+'''
 distribution = tf.contrib.distributions.MultivariateNormalDiag(
     loc=tf.zeros(shape=(z_hidden_size)), scale_diag=tf.ones(shape=(z_hidden_size)))
-z = distribution.sample() * sigma + mean  # dot multiply
-
-def weight_cal_false():
-  return tf.cond(tf.less(current_step, train_times * 0.9), lambda: (1 / (0.8 * train_times) * (current_step - 0.1 * train_times)), lambda: tf.cast(1, tf.float32))
+'''
+distribution = tf.random_normal([real_batch_size_placeholder, z_hidden_size])
+z = tf.multiply(distribution, sigma) + mean  # dot multiply
 
 #provide esstential information for training decoder
 hxz = tf.concat([hx, z], 1)
@@ -271,15 +273,21 @@ with tf.variable_scope("decoderRNN"):
       decoder_cell, a_embedded, sequence_length=tf.squeeze(a_sequence_length, 1), initial_state=hxz)
 result = tf.contrib.layers.fully_connected(result, vocabulary_size, scope="rnn/resEmbedding", activation_fn=None)
 
+def weight_cal_false():
+  return tf.cond(tf.less(current_step, train_times * 0.9), lambda: (-0.5 / (0.8 * train_times) * (current_step - 0.1 * train_times)), lambda: tf.cast(0, tf.float32))
+
 #calculate loss function
 square_sigma = tf.square(sigma)
 square_mean = tf.square(mean)
 a_target = tf.pad(a_placeholder[:, 1:], [[0, 0], [0, 1]])
-loss = 0.5 * tf.reduce_sum(1 + tf.log(square_sigma) - square_mean -
-                           square_sigma) / tf.cast(real_batch_size_placeholder, tf.float32)
+loss = 0.5 * tf.reduce_mean(1 + tf.log(square_sigma) - square_mean -
+                           square_sigma)
 kl_annealing_weight = tf.cond(tf.less(
-    current_step, train_times / 10), lambda: tf.cast(0, tf.float32), weight_cal_false);
+    current_step, train_times / 10), lambda: tf.cast(0.5, tf.float32), weight_cal_false);
+# kl_annealing_weight = 1
 loss *= kl_annealing_weight
+kl_lower_bound = 0.0002 #Level of KL loss at which to stop optimizing for KL.
+loss = tf.cond(tf.less(loss, kl_lower_bound), lambda: kl_lower_bound, lambda: loss)
 loss += tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=result,
                                                                labels=tf.one_hot(a_target, vocabulary_size, dtype=tf.float32)))
 train = tf.train.AdamOptimizer().minimize(loss)
@@ -353,8 +361,7 @@ predict_hx = tf.reduce_sum(predict_hx, reduction_indices=1)
 predict_hx = tf.div(predict_hx, tf.cast(predict_q_sequence_length, tf.float32))
 '''
 predict_hx = hx[0:1, :]
-predict_z = [distribution.sample()]
-predict_z = tf.tile(predict_z, [tf.shape(predict_hx)[0], 1])
+predict_z = tf.random_normal([1, z_hidden_size])
 predict_hxz = tf.concat([predict_hx, predict_z], 1)
 (predict_output, _, _) = tf.nn.raw_rnn(decoder_cell, loop_fn)
 predict_output = predict_output.stack()
@@ -397,8 +404,13 @@ with tf.Session() as sess:
     feed_dict = {q_placeholder: batch_q, a_placeholder: batch_a,
                                               q_sequence_length: batch_q_len, a_sequence_length: batch_a_len, real_batch_size_placeholder: real_qa_batch_size, current_step: step}
     l, _ = sess.run([loss, train], feed_dict=feed_dict)
+    '''
+    l, _, o= sess.run([loss, train,predict_output], feed_dict=feed_dict)
+    print(l)
+    print([reverse_dictionary[int(e)] for e in o[0]])
+    '''
     if step % 100 == 0:
       print(str(step) + ':' + str(l))
-      # saver.save(sess, "model")
+      saver.save(sess, "model")
       o = sess.run([predict_output], feed_dict=feed_dict)
       print([reverse_dictionary[int(e)] for e in o[0][0]])
