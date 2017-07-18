@@ -10,9 +10,11 @@ training_data_save_path = "data/train.tfrecords"
 # int -> word dictionary
 dictionary_save_path = "data/dictionary.json"
 # determine maximum question-answer pairs to convert & save, use -1 to process all pairs
-num_pairs = 10000
+num_pairs = -1
 # how many words should be added into dictionary
-num_words = 5000
+num_words = 30000
+# larger step speeds up the process but needs larger memory
+count_word_step = 2000000
 
 train_file = open(origin_data_path, "r")
 dictionary_file = open(dictionary_save_path, "w")
@@ -31,6 +33,7 @@ words = []
 texts = []
 
 #process and save QA pairs
+counter = collections.Counter()
 for i in range(linecount):
     try:
         line = train_file.readline().translate(string.maketrans("", ""), string.punctuation)
@@ -44,11 +47,16 @@ for i in range(linecount):
         '''
         '''
         words += question + answer
-        texts.append([question, answer])
+        # texts.append([question, answer])
+        if i % count_word_step == 0 and i:
+            print(i)
+            counter += collections.Counter(dict(collections.Counter(words).most_common(num_words)))
+            words = []
     except:
         break
+counter += collections.Counter(dict(collections.Counter(words).most_common(num_words)))
 train_file.close()
-print(1)
+exit()
 
 #create dictionary
 count = [['UNK', -1]]
@@ -60,7 +68,6 @@ for word, _ in count:
 reversed_dictionary = dict(zip(dictionary.values(), dictionary.keys()))
 dictionary_file.write(json.dumps(reversed_dictionary))
 del reversed_dictionary
-print(1)
 
 for [question, answer] in texts:
     question_int = []
@@ -77,8 +84,9 @@ for [question, answer] in texts:
             answer_int.append(dictionary["UNK"])
     example = tf.train.Example(features=tf.train.Features(feature={
                                 "question": tf.train.Feature(int64_list=tf.train.Int64List(value=question_int)),
-                                "answer": tf.train.Feature(int64_list=tf.train.Int64List(value=answer_int))}))
+                                "answer": tf.train.Feature(int64_list=tf.train.Int64List(value=answer_int)),
+                                "question_length": tf.train.Feature(int64_list=tf.train.Int64List(value=[len(question_int)])),
+                                "answer_length": tf.train.Feature(int64_list=tf.train.Int64List(value=[len(answer_int)]))}))
     writer.write(example.SerializeToString())
 
-print(1)
 writer.close()

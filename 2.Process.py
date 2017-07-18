@@ -4,159 +4,40 @@ import numpy as np
 import random
 import re
 import math
+from reader import *
 
 qa_batch_size = 128 # how many Q-A pairs to train at one batch
 train_times = 2001
 output_step = 100 # you can see loss and prediction every output_step
 predict_or_train = True # False: Only use pre-trained model to predict True: Train
 load_model = False # whether load pre-trained model before starting, only effective when train == True
-save_model = True # whether save model every output_step, only effective when train == True
+save_model = False # whether save model every output_step, only effective when train == True
 predict_question = "What are you doing" #should be a question without any punctuation
 max_response_length = 20 # for prediction, define the maximum response length
 predict_batch_size = 1 # for prediction, currently this program only support one question per batch
-
-# Get word embedding vector
-# questions and answers are a nested lists of words, with <GO> and <EOS> inserted (for RNN)
-# vocalbulary is a list of all words in questions and answers (for embedding propose)
-f = open("data/segTrain.txt", "r")
-questions = []
-answers = []
-while True:
-  line = f.readline()
-  if not line:
-    break
-  line = line.split('\t')
-  questions.append(["<GO>"] + line[0].split() + ["<EOS>"])
-  answers.append(["<GO>"] + line[1].split() + ["<EOS>"])
-f.close()
-vocabulary = []
-for q in questions+answers:
-  vocabulary += q
-
-vocabulary_size = 5000 #define maximum vocalbulary size
-vocabulary_size += 2  # for <GO> and <EOS>
-
-def build_dataset(words, n_words):
-  """Process raw inputs into a dataset."""
-  count = [['UNK', -1]]
-  count.extend(collections.Counter(words).most_common(n_words - 1))
-  dictionary = dict()
-  for word, _ in count:
-    dictionary[word] = len(dictionary)
-  data = list()
-  unk_count = 0
-  for word in words:
-    if word in dictionary:
-      index = dictionary[word]
-    else:
-      index = 0  # dictionary['UNK']
-      unk_count += 1
-    data.append(index)
-  count[0][1] = unk_count
-  reversed_dictionary = dict(zip(dictionary.values(), dictionary.keys()))
-  return data, count, dictionary, reversed_dictionary
-
-data, count, dictionary, reverse_dictionary = build_dataset(vocabulary,
-                                                            vocabulary_size)
-# reversed_dictionary: int -> word
-# dictionary: word -> int
-# Note: UNK stands for unknown word that is not in the dictionary
-
-#for testing
-'''
-print('Most common words (+UNK)', count[:5])
-print('Sample data', data[:10], [reverse_dictionary[i] for i in data[:10]])
-'''
-del vocabulary, count, data
-
-batch_size = 128 # Training batch size
 embedding_size = 512  # Dimension of the embedding vector.
 
+q, a, ql, al = read_and_decode("data/train.tfrecords")
+q_placeholder, a_placeholder, q_sequence_length, a_sequence_length= tf.train.shuffle_batch(
+    [q, a, ql, al], batch_size=qa_batch_size, capacity=2000, min_after_dequeue=1000)
+
+# reverse_dictionary: int -> word
+# Note: UNK stands for unknown word that is not in the dictionary
+reverse_dictionary = read_dictionary("data/dictionary.json")
+################## temporarily use
+dictionary = dict(zip(reverse_dictionary.values(), reverse_dictionary.keys()))
+for k in dictionary.keys():
+  dictionary[k] = int(dictionary[k])
+###################
+vocabulary_size = len(reverse_dictionary)
 embeddings = tf.Variable(
     tf.random_uniform([vocabulary_size, embedding_size], -1.0, 1.0))
 
 #Now we get the word embedding vector, start building biRNN
 
-#First translate questions and answers to predefined integer
-questions_data = []
-answers_data = []
-questions_data_length = []
-answers_data_length = []
-for question in questions:
-  words = []
-  for d in question:
-    try:
-      words.append(dictionary[d])
-    except:
-      words.append(dictionary['UNK'])
-  questions_data.append(words)
-  questions_data_length.append([len(words)])
-for answer in answers:
-  words = []
-  for d in answer:
-    try:
-      words.append(dictionary[d])
-    except:
-      words.append(dictionary['UNK'])
-  answers_data.append(words)
-  answers_data_length.append([len(words)])
-
-#Now define a batch generation function
-current_qa_index = 0 #for generate_qa_batch's use
-qa_pairs_count = len(questions) 
-
-# return:
-# batch_q, batch_a: batch of lists of integer, it will pad sequences with 0(dictionary['UNK']) if that sequence length is shorter than the maximum in current batch 
-# batch_q_len, batch_a_len: lists of shape [qa_batch_size, 1], standing for each question and answer's length 
-# qa_batch_size: real batch shape, useful when the expected batch size is larger than real one
-def generate_qa_batch(qa_batch_size):
-  global current_qa_index, questions_data, answers_data, questions_data_length, answers_data_length
-  if current_qa_index > qa_pairs_count - 1:
-    current_qa_index = 0
-  target_qa_index = current_qa_index + qa_batch_size
-  if target_qa_index > qa_pairs_count:
-    qa_batch_size = qa_pairs_count - current_qa_index
-    target_qa_index = qa_pairs_count
-  batch_q = questions_data[current_qa_index:target_qa_index]
-  batch_a = answers_data[current_qa_index:target_qa_index]
-  batch_q_len = questions_data_length[current_qa_index:target_qa_index]
-  batch_a_len = answers_data_length[current_qa_index:target_qa_index]
-  #pad short sequences
-  max_q_len = max(batch_q_len, key=lambda x: x[0])[0]
-  max_a_len = max(batch_a_len, key=lambda x: x[0])[0]
-  for i in range(len(batch_q)):
-    currentLen = len(batch_q[i])
-    if currentLen < max_q_len:
-      for _ in range(max_q_len - currentLen):
-        batch_q[i].append(0)
-  for i in range(len(batch_a)):
-    currentLen = len(batch_a[i])
-    if currentLen < max_a_len:
-      for _ in range(max_a_len - currentLen):
-        batch_a[i].append(0)
-  current_qa_index = target_qa_index
-  return batch_q, batch_a, batch_q_len, batch_a_len, qa_batch_size
-
-
-'''
-#for testing only
-a, b, c, d, e = generate_qa_batch(2)
-print(a, b, c, d, e)
-exit()
-'''
-
-
 current_step = tf.placeholder(tf.float32) # for annealing KL term
-q_placeholder = tf.placeholder(
-    tf.int32, shape=(None, None), name="q_placeholder")
-q_sequence_length = tf.placeholder(
-    tf.int32, shape=(None, 1), name="q_sequence_length")
-a_placeholder = tf.placeholder(
-    tf.int32, shape=(None, None), name="a_placeholder")
-a_sequence_length = tf.placeholder(
-    tf.int32, shape=(None, 1), name="a_sequence_length")
-real_batch_size_placeholder = tf.placeholder(
-    tf.int32, name="real_batch_size_placeholder")
+q_placeholder = tf.sparse_tensor_to_dense(q_placeholder, 0)
+a_placeholder = tf.sparse_tensor_to_dense(a_placeholder, 0)
 with tf.variable_scope("qRNNfw"):
   q_fw_cell = tf.nn.rnn_cell.GRUCell(embedding_size)
 with tf.variable_scope("qRNNbw"):
@@ -169,10 +50,10 @@ q_embedded = tf.nn.embedding_lookup(embeddings, q_placeholder)
 a_embedded = tf.nn.embedding_lookup(embeddings, a_placeholder)
 with tf.variable_scope("qRNN"):
   _, hx = tf.nn.bidirectional_dynamic_rnn(
-      q_fw_cell, q_bw_cell, q_embedded, sequence_length=tf.squeeze(q_sequence_length, 1), dtype=tf.float32)
+      q_fw_cell, q_bw_cell, q_embedded, sequence_length=q_sequence_length, dtype=tf.float32)
 with tf.variable_scope("aRNN"):
   _, hy = tf.nn.bidirectional_dynamic_rnn(
-      a_fw_cell, a_bw_cell, a_embedded, sequence_length=tf.squeeze(a_sequence_length, 1), dtype=tf.float32)
+      a_fw_cell, a_bw_cell, a_embedded, sequence_length=a_sequence_length, dtype=tf.float32)
 hx = tf.concat([hx[0], hx[1]], 1)
 hx = tf.contrib.layers.fully_connected(hx, embedding_size, activation_fn=tf.tanh, scope="hxFinalState")
 hy = tf.concat([hy[0], hy[1]], 1)
@@ -183,7 +64,7 @@ hxhy = tf.concat([hx, hy], 1)
 z_hidden_size = 64
 mean = tf.contrib.layers.fully_connected(hxhy, z_hidden_size, activation_fn=None)
 sigma = tf.exp(tf.contrib.layers.fully_connected(hxhy, z_hidden_size, activation_fn=None) / 2.0) #div 2 -> sqrt
-distribution = tf.random_normal([real_batch_size_placeholder, z_hidden_size])
+distribution = tf.random_normal([qa_batch_size, z_hidden_size])
 z = tf.multiply(distribution, sigma) + mean  # dot multiply
 
 #provide esstential information for training decoder
@@ -193,7 +74,7 @@ with tf.variable_scope("decoderRNNCell"):
   decoder_cell = tf.nn.rnn_cell.GRUCell(embedding_size + z_hidden_size)
 with tf.variable_scope("decoderRNN"):
   result, _ = tf.nn.dynamic_rnn(
-      decoder_cell, a_embedded, sequence_length=tf.squeeze(a_sequence_length, 1), initial_state=hxz)
+      decoder_cell, a_embedded, sequence_length=a_sequence_length, initial_state=hxz)
 result = tf.contrib.layers.fully_connected(result, vocabulary_size, scope="rnn/resEmbedding", activation_fn=None)
 
 # function for calculating anneal KL term's weight
@@ -262,10 +143,10 @@ for question in predict_questions:
       words.append(dictionary["UNK"])
   predict_questions_int.append(words)
 predict_q_embedded = tf.nn.embedding_lookup(embeddings, predict_questions_int)
-predict_q_sequence_length = [[len(e)] for e in predict_questions_int]
+predict_q_sequence_length = [len(e) for e in predict_questions_int]
 with tf.variable_scope("predict_qRNN"):
   _, predict_hx = tf.nn.bidirectional_dynamic_rnn(
-      q_fw_cell, q_bw_cell, predict_q_embedded, sequence_length=tf.squeeze(predict_q_sequence_length, 1), dtype=tf.float32)
+      q_fw_cell, q_bw_cell, predict_q_embedded, sequence_length=predict_q_sequence_length, dtype=tf.float32)
 predict_hx = tf.concat([predict_hx[0], predict_hx[1]], 1)
 predict_hx = tf.contrib.layers.fully_connected(predict_hx, embedding_size, activation_fn=tf.tanh, scope="hxFinalState", reuse=True)
 predict_z = tf.random_normal([1, z_hidden_size])
@@ -279,14 +160,13 @@ predict_output = tf.argmax(predict_output, axis=2)
 
 with tf.Session() as sess:
   sess.run(tf.global_variables_initializer())
+  threads = tf.train.start_queue_runners(sess)
+
   if predict_or_train == False or (predict_or_train == True and load_model == True):
     saver.restore(sess, "model")
 
-  batch_q, batch_a, batch_q_len, batch_a_len, real_qa_batch_size = generate_qa_batch(
-      qa_batch_size)
   for step in range(train_times):
-    feed_dict = {q_placeholder: batch_q, a_placeholder: batch_a,
-                                              q_sequence_length: batch_q_len, a_sequence_length: batch_a_len, real_batch_size_placeholder: real_qa_batch_size, current_step: step}
+    feed_dict = {current_step: step}
                                               # Only for prediction
     if predict_or_train == False:
       o = sess.run([predict_output], feed_dict=feed_dict)
@@ -298,4 +178,4 @@ with tf.Session() as sess:
         if save_model == True:
           saver.save(sess, "model")
         o = sess.run([predict_output], feed_dict=feed_dict)
-        print([reverse_dictionary[int(e)] for e in o[0][0]])
+        print([reverse_dictionary[str(e)] for e in o[0][0]])
