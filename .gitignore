@@ -3,3 +3,5 @@ word2vec_basic.py
 .vscode/
 model*
 checkpoint
+graph/
+model/
