@@ -7,6 +7,7 @@ import math
 from reader import *
 
 #common settings
+predict_or_train = False  # False: predict True: train
 model_path = "model/model"
 dictionary_path = "data/dictionary.json"
 embedding_size = 512  # Dimension of the embedding vector.
@@ -16,7 +17,6 @@ z_hidden_size = 64  # Get mean and variance of latent variable z
 qa_batch_size = 64  # how many Q-A pairs to train at one batch
 train_times = 2000
 output_step = 100  # you can see loss every output_step
-# whether load pre-trained model before starting, only effective when train == True
 load_model = False
 save_model = True  # whether save model every output_step, only effective when train == True
 save_step = train_times / 2  # program will save model every save_step
@@ -26,13 +26,10 @@ kl_lower_bound = 0.0002  # Level of KL loss at which to stop optimizing for KL.
 
 #settings for prediction
 max_response_length = 20  # for prediction, define the maximum response length
-# for prediction, currently this program only support one question per batch
-predict_qa_size = 2
-# for predction, determine how many times the program should answer each question
-predict_times = 3
+predict_qa_size = 2 # for prediction, currently this program only support one question per batch
+predict_times = 3 # for predction, determine how many times the program should answer each question
 predict_output_path = "data/predict_output.txt"
 valid_data_path = "data/valid.tfrecords"
-
 
 def get_default_graph(vocabulary_size):
   training_graph = tf.Graph()
@@ -247,11 +244,11 @@ def predict(graph, reverse_dictionary, vocabulary_size):
             translate_int_to_string(predict_answer[i], reverse_dictionary))
       predict_output = open(predict_output_path, "w")
       for i in range(predict_qa_size):
-        predict_output.write(translate_int_to_string(
-            questions[i], reverse_dictionary) + "?\r\n" + translate_int_to_string(answers[i], reverse_dictionary) + ".\r\n")
+        predict_output.write("Q: " + translate_int_to_string(
+            questions[i], reverse_dictionary) + "?\r\nA: " + translate_int_to_string(answers[i], reverse_dictionary) + ".\r\nPrediction:")
         for p_a in predict_answer_list[i]:
-          predict_output.write(p_a + "\r\n")
-        predict_output.write("\r\n")
+          predict_output.write("\r\n" + p_a)
+        predict_output.write("-----------------------------------\r\n")
       predict_output.close()
   return
 
@@ -259,5 +256,7 @@ def predict(graph, reverse_dictionary, vocabulary_size):
 if __name__ == "__main__":
   reverse_dictionary, vocabulary_size = get_dictionary(dictionary_path)
   g = get_default_graph(vocabulary_size)
-  # train(g)
-  predict(g, reverse_dictionary, vocabulary_size)
+  if predict_or_train == False:
+    predict(g, reverse_dictionary, vocabulary_size)
+  else:
+    train(g)
