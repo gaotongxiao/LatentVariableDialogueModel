@@ -19,7 +19,7 @@ def read_dictionary(filename):
     return json.loads(open(filename, "r").readline())
 
 if __name__ == "__main__":
-    q, a, ql, al = read_and_decode("data/train.tfrecords")
+    q, a, ql, al = read_and_decode("data/valid.tfrecords")
     q_batch, a_batch, ql_batch, al_batch = tf.train.shuffle_batch(
         [q, a, ql, al], batch_size=2, capacity=2000, min_after_dequeue=1000)
     sess = tf.Session()
