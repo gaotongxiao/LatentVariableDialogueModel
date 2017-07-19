@@ -5,7 +5,6 @@ import random
 import re
 import math
 from reader import *
-from build_graph import *
 
 #common settings
 model_path = "model/model"
@@ -15,7 +14,7 @@ z_hidden_size = 64  # Get mean and variance of latent variable z
 
 #settings for training
 qa_batch_size = 64  # how many Q-A pairs to train at one batch
-train_times = 200
+train_times = 2000
 output_step = 100  # you can see loss every output_step
 # whether load pre-trained model before starting, only effective when train == True
 load_model = False
@@ -28,7 +27,7 @@ kl_lower_bound = 0.0002  # Level of KL loss at which to stop optimizing for KL.
 #settings for prediction
 max_response_length = 20  # for prediction, define the maximum response length
 # for prediction, currently this program only support one question per batch
-predict_batch_size = 2
+predict_qa_size = 2
 # for predction, determine how many times the program should answer each question
 predict_times = 3
 predict_output_path = "data/predict_output.txt"
@@ -173,15 +172,15 @@ def predict(graph, reverse_dictionary, vocabulary_size):
     embeddings = tf.get_collection("embeddings")[0]
     p_q, p_a, p_ql, p_al = read_and_decode(valid_data_path)
     p_q_placeholder, p_a_placeholder, p_q_sequence_length, p_a_sequence_length = tf.train.shuffle_batch(
-        [p_q, p_a, p_ql, p_al], batch_size=predict_batch_size, capacity=predict_batch_size * 2, min_after_dequeue=predict_batch_size)
+        [p_q, p_a, p_ql, p_al], batch_size=predict_qa_size, capacity=predict_qa_size * 2, min_after_dequeue=predict_qa_size)
     p_q_placeholder = tf.sparse_tensor_to_dense(p_q_placeholder)
     p_a_placeholder = tf.sparse_tensor_to_dense(p_a_placeholder)
 
     # 1:<GO> 2:<EOS>
     go_embedded = tf.nn.embedding_lookup(
-        embeddings, tf.tile([1], [predict_batch_size * predict_times]))
+        embeddings, tf.tile([1], [predict_qa_size * predict_times]))
     eos_embedded = tf.nn.embedding_lookup(
-        embeddings, tf.tile([2], [predict_batch_size * predict_times]))
+        embeddings, tf.tile([2], [predict_qa_size * predict_times]))
 
     # for raw_rnn's use
     # In prediction, we needs to feed cell's previous output to its next input
@@ -205,7 +204,7 @@ def predict(graph, reverse_dictionary, vocabulary_size):
         ret = tf.nn.embedding_lookup(embeddings, predict)
         # just for skipping while_loop's shape checking
         ret = tf.reshape(
-            ret, [predict_batch_size * predict_times, embedding_size])
+            ret, [predict_qa_size * predict_times, embedding_size])
         return ret
       element_finished = (time >= max_response_length)
       finished = tf.reduce_all(element_finished)
@@ -222,12 +221,12 @@ def predict(graph, reverse_dictionary, vocabulary_size):
     predict_hx = tf.contrib.layers.fully_connected(
         predict_hx, embedding_size, activation_fn=tf.tanh, scope="hxFinalState", reuse=True)
     predict_z = tf.random_normal(
-        [predict_batch_size * predict_times, z_hidden_size])
+        [predict_qa_size * predict_times, z_hidden_size])
     predict_hxz = tf.concat([predict_hx, predict_z], 1)
     (predict_output, _, _) = tf.nn.raw_rnn(
         tf.get_collection("decoder_cell")[0], loop_fn)
     predict_output = predict_output.stack()
-    #now predict_output has shape [max_response_length, predict_batch_size, embedding_size+z_hidden_size]
+    #now predict_output has shape [max_response_length, predict_qa_size, embedding_size+z_hidden_size]
     predict_output = tf.transpose(
         tf.convert_to_tensor(predict_output), perm=[1, 0, 2])
     predict_output = tf.contrib.layers.fully_connected(
@@ -241,15 +240,24 @@ def predict(graph, reverse_dictionary, vocabulary_size):
       questions, answers, predict_answer = sess.run([p_q_placeholder, p_a_placeholder, predict_output])
       coord.request_stop()
       coord.join(threads)
-      print(translate_int_to_string(answers[0], reverse_dictionary))
-      exit()
-      ans = o[0].tolist()
-      for a in ans:
-        print([reverse_dictionary[str(w)] for w in a])
+      predict_answer = predict_answer.tolist()
+      predict_answer_list = [[] for _ in range(predict_qa_size)]
+      for i in range(len(predict_answer)):
+        predict_answer_list[i % predict_qa_size].append(
+            translate_int_to_string(predict_answer[i], reverse_dictionary))
+      predict_output = open(predict_output_path, "w")
+      for i in range(predict_qa_size):
+        predict_output.write(translate_int_to_string(
+            questions[i], reverse_dictionary) + "?\r\n" + translate_int_to_string(answers[i], reverse_dictionary) + ".\r\n")
+        for p_a in predict_answer_list[i]:
+          predict_output.write(p_a + "\r\n")
+        predict_output.write("\r\n")
+      predict_output.close()
   return
 
 
 if __name__ == "__main__":
   reverse_dictionary, vocabulary_size = get_dictionary(dictionary_path)
   g = get_default_graph(vocabulary_size)
+  # train(g)
   predict(g, reverse_dictionary, vocabulary_size)
