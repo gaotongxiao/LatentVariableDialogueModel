@@ -127,6 +127,8 @@ def train(graph):
         saver.restore(sess, model_path)
 
       try:
+        #epoch to be added
+        #batch bug to be fixed
         for step in range(train_times):
           feed_dict = {tf.get_collection("current_step")[0]: step}
           l, _ = sess.run([tf.get_collection("loss")[0],
