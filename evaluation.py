@@ -1,4 +1,4 @@
-#the test result format is like: (when predict_qa_size = 2)
+#the test result format is like: (when predict_times = 2)
 #2
 #Q:
 #<Q>
@@ -22,9 +22,9 @@ pred_file = open(predict_output_path, "r")
 predict_stat_path = "data/stat.txt"
 stat_file = open(predict_stat_path, "w")
 
-predict_qa_size = int(pred_file.readline())
-print("Predict_qa_size: " + str(predict_qa_size))
-block_size = predict_qa_size + 6
+predict_times = int(pred_file.readline())
+print("predict_times: " + str(predict_times))
+block_size = predict_times + 6
 block_number = 0 #number of blocks(questions)
 
 question = []
@@ -32,28 +32,28 @@ answer = []
 prediction = []
 
 #read file
-while(pred_file.readline() == "Q:\n"):
+while(pred_file.readline() == "Q:\r\n"):
 	question.append(pred_file.readline())
-	if pred_file.readline() != "A:\n":
+	if pred_file.readline() != "A:\r\n":
 		print("file format error(A:)")
 	answer.append(pred_file.readline())
-	if pred_file.readline() != "P:\n":
+	if pred_file.readline() != "P:\r\n":
 		print("file format error(P:)")
 	current_prediction = []
-	for i in range(predict_qa_size):
+	for i in range(predict_times):
 		current_prediction.append(pred_file.readline())
 	prediction.append(current_prediction)
-	if pred_file.readline() != "------\n":
+	if pred_file.readline() != "------\r\n":
 		print("file format error(------)")
 	block_number += 1
 
 
 #calculation of Zipf parameter:
-words_to_use = 8 #use the top** highest frequency words to calculate zipf parameter
+words_to_use = 10 #use the top** highest frequency words to calculate zipf parameter
 #frequency dictionary:
 freq_dict = {}
 for i in range(block_number):
-	for j in range(predict_qa_size):
+	for j in range(predict_times):
 		words = prediction[i][j].split()
 		for word in words:
 			try:
@@ -61,14 +61,12 @@ for i in range(block_number):
 			except:
 				freq_dict[word] = 1
 #a list of words sorted by freq
-print(freq_dict)
 sorted_freq = sorted(freq_dict.values(), reverse = True)
+print("Top Frequences Used:")
 print(sorted_freq)
 use_freq = sorted_freq[:words_to_use]
 log_use_freq = [math.log(i) for i in use_freq]
 log_index = [math.log(i) for i in range(1,words_to_use+1)]
-print(len(log_use_freq))#DEBUG
-print(len(log_index))#DEBUG
 #do linear regression
 k,b = np.polyfit(log_index, log_use_freq, 1) #y = kx+b where x = log_index, y = log_use_freq
 zipf_parameter = -k #here we estimate zipf parameter using linear regression under log scale of the PMF of the zipf distribution
@@ -80,7 +78,7 @@ for i in range(block_number):
 	unique_adder = 0 #the number of unique sentences of this question
 	unique_sentences = []
 	#update unique_adder in this for loop
-	for j in range(predict_qa_size):
+	for j in range(predict_times):
 		sentence = prediction[i][j]
 		duplicate = False
 		for prev_sentence in unique_sentences:
@@ -91,6 +89,6 @@ for i in range(block_number):
 			unique_sentences.append(sentence)
 			unique_adder +=1
 	unique_count += unique_adder
-unique_ratio = float(unique_count)/(predict_qa_size*block_number)
+unique_ratio = float(unique_count)/(predict_times*block_number)
 print("unique_ratio: " + str(unique_ratio))
 
